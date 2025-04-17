@@ -1,0 +1,6 @@
+opencv-python>=4.7.0
+mediapipe>=0.10.0
+numpy>=1.22.0
+flask>=2.2.3
+flask-cors>=5.0.0
+pillow>=9.4.0 
