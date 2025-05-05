@@ -34,16 +34,16 @@ class GazeTracker:
         
         # Direction weights - give higher weight to certain directions
         self.direction_weights = {
-            "center": 0.0,  # On-screen
-            "up": 1.0,      # Off-screen
-            "down": 1.0,    # Off-screen
-            "left": 1.0,    # Off-screen
-            "right": 1.0,   # Off-screen
-            "up-left": 1.0, # Off-screen
-            "up-right": 1.0,# Off-screen
-            "down-left": 1.0,# Off-screen
-            "down-right": 1.0,# Off-screen
-            "unknown": 0.5  # Partially off-screen
+            "center": 0.0,    # On-screen
+            "up": 1.0,        # Off-screen
+            "down": 0.2,      # Mostly on-screen (reading/writing)
+            "left": 1.0,      # Off-screen
+            "right": 1.0,     # Off-screen
+            "up-left": 1.0,   # Off-screen
+            "up-right": 1.0,  # Off-screen
+            "down-left": 0.5, # Partially off-screen
+            "down-right": 0.5,# Partially off-screen
+            "unknown": 0.5    # Partially off-screen
         }
     
     def update(self, gaze_direction, is_looking_at_screen, ratios):

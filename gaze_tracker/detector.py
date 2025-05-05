@@ -9,8 +9,23 @@ class FaceDetector:
             max_num_faces=1,
             refine_landmarks=True,
             min_detection_confidence=min_detection_confidence,
-            min_tracking_confidence=0.5
+            min_tracking_confidence=0.5,
+            static_image_mode=False
         )
+        self.mp_drawing = mp.solutions.drawing_utils
+        self.mp_drawing_styles = mp.solutions.drawing_styles
+        
+        # Drawing specifications
+        self.landmark_drawing_spec = self.mp_drawing.DrawingSpec(
+            color=(0, 255, 0),
+            thickness=1,
+            circle_radius=1
+        )
+        self.connection_drawing_spec = self.mp_drawing.DrawingSpec(
+            color=(255, 255, 255),
+            thickness=1
+        )
+        
         # Eye landmarks indices from MediaPipe Face Mesh
         # Left eye landmarks
         self.LEFT_EYE_INDICES = [362, 382, 381, 380, 374, 373, 390, 249, 263, 466, 388, 387, 386, 385, 384, 398]
@@ -31,15 +46,27 @@ class FaceDetector:
             landmarks: Normalized face landmarks if face detected, None otherwise
             processed_frame: Frame with landmarks drawn if face detected
         """
+        if frame is None:
+            return None, None
+            
+        # Create a copy for visualization
+        annotated_frame = frame.copy()
+        frame_height, frame_width = frame.shape[:2]
+        
         # Convert the BGR image to RGB
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame_height, frame_width = frame.shape[:2]
+        
+        # To improve performance, optionally mark the image as not writeable
+        rgb_frame.flags.writeable = False
         
         # Process the frame and find face landmarks
         results = self.face_mesh.process(rgb_frame)
         
+        # Enable writing to the image again
+        rgb_frame.flags.writeable = True
+        
         if not results.multi_face_landmarks:
-            return None, frame
+            return None, annotated_frame
         
         face_landmarks = results.multi_face_landmarks[0]
         
@@ -50,7 +77,32 @@ class FaceDetector:
             y = int(landmark.y * frame_height)
             landmarks.append((x, y))
         
-        return landmarks, frame
+        # Draw the face mesh annotations
+        self.mp_drawing.draw_landmarks(
+            image=annotated_frame,
+            landmark_list=face_landmarks,
+            connections=self.mp_face_mesh.FACEMESH_TESSELATION,
+            landmark_drawing_spec=self.landmark_drawing_spec,
+            connection_drawing_spec=self.connection_drawing_spec
+        )
+        
+        # Draw eyes contour
+        self.mp_drawing.draw_landmarks(
+            image=annotated_frame,
+            landmark_list=face_landmarks,
+            connections=self.mp_face_mesh.FACEMESH_LEFT_EYE,
+            landmark_drawing_spec=None,
+            connection_drawing_spec=self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2)
+        )
+        self.mp_drawing.draw_landmarks(
+            image=annotated_frame,
+            landmark_list=face_landmarks,
+            connections=self.mp_face_mesh.FACEMESH_RIGHT_EYE,
+            landmark_drawing_spec=None,
+            connection_drawing_spec=self.mp_drawing.DrawingSpec(color=(0, 255, 0), thickness=2)
+        )
+        
+        return landmarks, annotated_frame
 
     def get_eye_landmarks(self, landmarks):
         """
@@ -68,12 +120,16 @@ class FaceDetector:
         if not landmarks:
             return None, None, None, None
         
-        left_eye = [landmarks[i] for i in self.LEFT_EYE_INDICES]
-        right_eye = [landmarks[i] for i in self.RIGHT_EYE_INDICES]
-        left_iris = [landmarks[i] for i in self.LEFT_IRIS_INDICES]
-        right_iris = [landmarks[i] for i in self.RIGHT_IRIS_INDICES]
-        
-        return left_eye, right_eye, left_iris, right_iris
+        try:
+            left_eye = [landmarks[i] for i in self.LEFT_EYE_INDICES]
+            right_eye = [landmarks[i] for i in self.RIGHT_EYE_INDICES]
+            left_iris = [landmarks[i] for i in self.LEFT_IRIS_INDICES]
+            right_iris = [landmarks[i] for i in self.RIGHT_IRIS_INDICES]
+            
+            return left_eye, right_eye, left_iris, right_iris
+        except IndexError:
+            print("Warning: Could not extract all eye landmarks")
+            return None, None, None, None
     
     def draw_eye_landmarks(self, frame, left_eye, right_eye, left_iris, right_iris):
         """
@@ -89,21 +145,26 @@ class FaceDetector:
         Returns:
             frame: Frame with eye landmarks drawn
         """
-        if left_eye and right_eye:
-            # Draw left eye landmarks
-            for point in left_eye:
-                cv2.circle(frame, point, 1, (0, 255, 0), -1)
+        if frame is None:
+            return None
             
-            # Draw right eye landmarks
-            for point in right_eye:
-                cv2.circle(frame, point, 1, (0, 255, 0), -1)
-            
-            # Draw left iris landmarks
-            for point in left_iris:
-                cv2.circle(frame, point, 1, (255, 0, 0), -1)
-            
-            # Draw right iris landmarks
-            for point in right_iris:
-                cv2.circle(frame, point, 1, (255, 0, 0), -1)
+        viz_frame = frame.copy()
         
-        return frame 
+        if left_eye and right_eye:
+            # Draw eye contours
+            cv2.polylines(viz_frame, [np.array(left_eye)], True, (0, 255, 0), 2)
+            cv2.polylines(viz_frame, [np.array(right_eye)], True, (0, 255, 0), 2)
+            
+            # Draw iris contours and centers
+            if left_iris and right_iris:
+                # Left iris
+                cv2.polylines(viz_frame, [np.array(left_iris)], True, (255, 0, 0), 2)
+                left_center = np.mean(left_iris, axis=0).astype(int)
+                cv2.circle(viz_frame, tuple(left_center), 2, (0, 0, 255), -1)
+                
+                # Right iris
+                cv2.polylines(viz_frame, [np.array(right_iris)], True, (255, 0, 0), 2)
+                right_center = np.mean(right_iris, axis=0).astype(int)
+                cv2.circle(viz_frame, tuple(right_center), 2, (0, 0, 255), -1)
+        
+        return viz_frame 

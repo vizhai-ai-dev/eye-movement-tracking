@@ -6,8 +6,10 @@ import time
 class GazeEstimator:
     def __init__(self):
         # Default threshold values for gaze direction
-        self.horizontal_ratio_threshold = 0.25  # Threshold for left/right gaze (reduced from 0.42)
-        self.vertical_ratio_threshold = 0.30    # Threshold for up/down gaze (reduced from 0.55)
+        self.horizontal_ratio_threshold = 0.25  # Threshold for left/right gaze
+        self.vertical_ratio_threshold = 0.30    # Base threshold for vertical gaze
+        self.vertical_up_threshold = 0.30       # Stricter threshold for upward gaze
+        self.vertical_down_threshold = 0.45     # More lenient threshold for downward gaze
         
         # Buffer for gaze directions (to reduce noise)
         self.direction_buffer = []
@@ -87,13 +89,19 @@ class GazeEstimator:
         else:
             h_direction = "center"
         
-        # Vertical direction
-        if v_offset < -self.vertical_ratio_threshold:
+        # Vertical direction with asymmetric thresholds
+        if v_offset < -self.vertical_up_threshold:
             v_direction = "up"
-        elif v_offset > self.vertical_ratio_threshold:
+        elif v_offset > self.vertical_down_threshold:
             v_direction = "down"
         else:
             v_direction = "center"
+        
+        # Special handling for downward gaze
+        if v_direction == "down" and h_direction == "center":
+            # If looking down within a reasonable horizontal range, consider it "center"
+            if abs(h_offset) < self.horizontal_ratio_threshold * 1.5:
+                return "center"
         
         # Combine directions
         if h_direction == "center" and v_direction == "center":
@@ -180,13 +188,14 @@ class GazeEstimator:
         self.center_horizontal_ratio = np.mean(filtered_h_ratios)
         self.center_vertical_ratio = np.mean(filtered_v_ratios)
         
-        # Adjust thresholds based on observed variance - set narrower thresholds for more sensitivity
+        # Adjust thresholds based on observed variance
         self.horizontal_ratio_threshold = max(0.05, min(0.25, 1.5 * np.std(filtered_h_ratios)))
-        self.vertical_ratio_threshold = max(0.05, min(0.25, 1.5 * np.std(filtered_v_ratios)))
+        self.vertical_up_threshold = max(0.05, min(0.30, 1.5 * np.std(filtered_v_ratios)))
+        self.vertical_down_threshold = max(0.05, min(0.45, 2.0 * np.std(filtered_v_ratios)))
         
         print(f"Calibration complete:")
         print(f"  Center position: H={self.center_horizontal_ratio:.2f}, V={self.center_vertical_ratio:.2f}")
-        print(f"  Thresholds: H={self.horizontal_ratio_threshold:.2f}, V={self.vertical_ratio_threshold:.2f}")
+        print(f"  Thresholds: H={self.horizontal_ratio_threshold:.2f}, Up={self.vertical_up_threshold:.2f}, Down={self.vertical_down_threshold:.2f}")
         
         self.is_calibrated = True
         self.calibration_needed = False
@@ -199,8 +208,9 @@ class GazeEstimator:
         self.calibration_needed = True
         self.center_horizontal_ratio = 0.5
         self.center_vertical_ratio = 0.5
-        self.horizontal_ratio_threshold = 0.25  # Default threshold
-        self.vertical_ratio_threshold = 0.30    # Default threshold
+        self.horizontal_ratio_threshold = 0.25    # Default threshold
+        self.vertical_up_threshold = 0.30         # Default up threshold
+        self.vertical_down_threshold = 0.45       # Default down threshold
     
     def estimate_gaze_direction(self, left_eye, right_eye, left_iris, right_iris):
         """
@@ -261,64 +271,98 @@ class GazeEstimator:
     
     def draw_gaze_visualization(self, frame, left_eye, right_eye, left_iris, right_iris, gaze_direction):
         """
-        Draw visualization of gaze on the frame
+        Draw gaze visualization on the frame
         
         Args:
             frame: BGR image
-            left_eye, right_eye, left_iris, right_iris: Eye landmarks
-            gaze_direction: Estimated gaze direction
+            left_eye, right_eye: Eye landmarks
+            left_iris, right_iris: Iris landmarks
+            gaze_direction: Current gaze direction
             
         Returns:
             frame: Frame with gaze visualization
         """
-        if not left_eye or not right_eye:
+        if not all([left_eye, right_eye, left_iris, right_iris]):
             return frame
         
-        # Draw eye centers
+        # Create a copy of the frame for visualization
+        viz_frame = frame.copy()
+        
+        # Calculate eye centers and boxes
         left_eye_center = self._calculate_eye_center(left_eye)
         right_eye_center = self._calculate_eye_center(right_eye)
-        
-        # Draw iris centers
         left_iris_center = self._calculate_iris_center(left_iris)
         right_iris_center = self._calculate_iris_center(right_iris)
         
-        if left_eye_center and right_eye_center:
-            cv2.circle(frame, left_eye_center, 3, (0, 0, 255), -1)
-            cv2.circle(frame, right_eye_center, 3, (0, 0, 255), -1)
+        left_eye_box = self._get_eye_box(left_eye)
+        right_eye_box = self._get_eye_box(right_eye)
         
-        if left_iris_center and right_iris_center:
-            cv2.circle(frame, left_iris_center, 3, (255, 0, 255), -1)
-            cv2.circle(frame, right_iris_center, 3, (255, 0, 255), -1)
+        # Draw eye boxes
+        if left_eye_box:
+            x, y, w, h = left_eye_box
+            cv2.rectangle(viz_frame, (x, y), (x + w, y + h), (0, 255, 0), 1)
+        
+        if right_eye_box:
+            x, y, w, h = right_eye_box
+            cv2.rectangle(viz_frame, (x, y), (x + w, y + h), (0, 255, 0), 1)
+        
+        # Draw iris centers and gaze vectors
+        if left_iris_center and left_eye_center:
+            cv2.circle(viz_frame, left_iris_center, 3, (0, 0, 255), -1)
+            cv2.line(viz_frame, left_eye_center, left_iris_center, (255, 0, 0), 1)
+        
+        if right_iris_center and right_eye_center:
+            cv2.circle(viz_frame, right_iris_center, 3, (0, 0, 255), -1)
+            cv2.line(viz_frame, right_eye_center, right_iris_center, (255, 0, 0), 1)
+        
+        # Draw gaze direction indicator
+        frame_h, frame_w = frame.shape[:2]
+        indicator_size = min(frame_w, frame_h) // 6
+        margin = 20
+        bg_color = (32, 32, 32)
+        
+        # Draw background for gaze indicator
+        cv2.rectangle(viz_frame, 
+                     (margin, margin),
+                     (margin + indicator_size, margin + indicator_size),
+                     bg_color, -1)
+        cv2.rectangle(viz_frame,
+                     (margin, margin),
+                     (margin + indicator_size, margin + indicator_size),
+                     (128, 128, 128), 1)
+        
+        # Draw center point
+        center_x = margin + indicator_size // 2
+        center_y = margin + indicator_size // 2
+        cv2.circle(viz_frame, (center_x, center_y), 2, (0, 255, 0), -1)
+        
+        # Draw direction indicator
+        indicator_length = indicator_size // 3
+        if gaze_direction != "center":
+            dx, dy = 0, 0
+            if "left" in gaze_direction: dx = -1
+            if "right" in gaze_direction: dx = 1
+            if "up" in gaze_direction: dy = -1
+            if "down" in gaze_direction: dy = 1
             
-            # Draw line from eye center to iris center to show gaze direction
-            if left_eye_center and right_eye_center:
-                cv2.line(frame, left_eye_center, left_iris_center, (0, 255, 255), 1)
-                cv2.line(frame, right_eye_center, right_iris_center, (0, 255, 255), 1)
-        
-        # Add gaze direction text
-        # Color code based on direction (green for center, red for off-center)
-        if gaze_direction == "center":
-            text_color = (0, 255, 0)  # Green for center
-        else:
-            text_color = (0, 0, 255)  # Red for off-center
+            end_x = center_x + dx * indicator_length
+            end_y = center_y + dy * indicator_length
             
-        cv2.putText(frame, f"Looking: {gaze_direction}", (10, 30), 
-                   cv2.FONT_HERSHEY_SIMPLEX, 0.7, text_color, 2)
-        
-        # Add thresholds for debugging
-        cv2.putText(frame, f"Thres: H={self.horizontal_ratio_threshold:.2f}, V={self.vertical_ratio_threshold:.2f}", 
-                   (10, frame.shape[0] - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+            cv2.arrowedLine(viz_frame,
+                           (center_x, center_y),
+                           (end_x, end_y),
+                           (0, 255, 0), 2, tipLength=0.3)
         
         # Add calibration status
-        if self.calibration_needed:
-            cv2.putText(frame, "CALIBRATION NEEDED", (10, 60), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-        elif not self.is_calibrated:
-            progress = len(self.calibration_samples) / 30.0 * 100
-            cv2.putText(frame, f"Calibrating: {progress:.0f}%", (10, 60), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
-        else:
-            cv2.putText(frame, "Calibrated", (10, 60), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        status_color = (0, 255, 0) if self.is_calibrated else (0, 128, 255)
+        status_text = "Calibrated" if self.is_calibrated else "Not Calibrated"
+        cv2.putText(viz_frame, status_text,
+                    (margin, margin + indicator_size + 20),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, status_color, 1)
         
-        return frame 
+        # Add gaze direction text
+        cv2.putText(viz_frame, f"Gaze: {gaze_direction}",
+                    (margin, margin + indicator_size + 40),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+        
+        return viz_frame 
