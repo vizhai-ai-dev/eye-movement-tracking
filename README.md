@@ -1,4 +1,4 @@
-# AI Proctoring System with Multiface Detection
+# AI Proctoring System
 
 An advanced AI-powered proctoring system that combines multiface detection and intelligent eye tracking to monitor exam-taking behavior. The system is designed to be fair and practical, allowing natural behaviors like looking down at notes while detecting suspicious activities.
 
